@@ -52,12 +52,18 @@ class VertexAILLMProvider(LLMProvider):
     def __init__(
         self,
         project_id: Optional[str] = None,
-        location: str = "us-central1",
-        model_name: str = "gemini-2.0-flash",
+        location: Optional[str] = None,
+        model_name: Optional[str] = None,
     ):
         self.project_id = project_id or os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-        self.location = location or os.getenv("GCP_REGION", "us-central1")
-        self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        raw_location = location or os.getenv("GCP_REGION") or "us-central1"
+        # Strip trailing zone letter if provided (e.g. asia-southeast1-b -> asia-southeast1)
+        if raw_location and raw_location.count('-') > 1:
+            parts = raw_location.split('-')
+            if len(parts[-1]) == 1 and parts[-1].isalpha():
+                raw_location = '-'.join(parts[:-1])
+        self.location = raw_location
+        self.model_name = model_name or os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
         self.api_key = os.getenv("GEMINI_API_KEY")
 
         logger.info(
@@ -92,10 +98,12 @@ Values on Screen: {context.get('values', {})}
             from google import genai
             from google.genai import types
 
+            use_vertex = bool(self.project_id) or not bool(self.api_key)
             client = genai.Client(
+                vertexai=use_vertex,
                 project=self.project_id,
                 location=self.location,
-                api_key=self.api_key if not self.project_id else None,
+                api_key=self.api_key if not use_vertex else None,
             )
 
             # Generate content
@@ -139,7 +147,7 @@ def get_llm_provider() -> LLMProvider:
     Defaults to MockLLMProvider for zero-config offline runs.
     """
     provider_type = os.getenv("LLM_PROVIDER", "mock").lower()
-
+    logger.info(f"LLM Provider selected: {provider_type}")
     if provider_type in ("vertex", "vertexai", "gemini", "gcp"):
         return VertexAILLMProvider()
     

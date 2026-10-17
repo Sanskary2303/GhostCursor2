@@ -23,7 +23,12 @@ from .run_manager import RunManager
 from .storage.memory import MemoryRunStore
 from .llm.provider import MockLLMProvider
 
-load_dotenv()
+# Load .env from orchestrator directory first, fallback to current working directory
+_env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(_env_path):
+    load_dotenv(_env_path)
+else:
+    load_dotenv()
 
 logger = logging.getLogger("ghost_cursor")
 logging.basicConfig(level=logging.INFO)
