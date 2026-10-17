@@ -93,6 +93,34 @@ export class ApiClient {
     return this.post(body);
   }
 
+  /**
+   * Fetch contextual suggested questions for the current page.
+   *
+   * @param page    - Current logical page
+   * @param targets - Registered targets IDs on current screen
+   * @returns Array of 2-3 suggested question strings
+   */
+  async getSuggestions(page: string, targets?: string[]): Promise<string[]> {
+    try {
+      const baseUrl = this.gatewayUrl.replace(/\/+$/, '');
+      const url = `${baseUrl}/suggestions?page=${encodeURIComponent(page)}`;
+      const headers = await this.getHeaders();
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          ...headers,
+        },
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data.suggestions) ? data.suggestions : [];
+    } catch {
+      return [];
+    }
+  }
+
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------

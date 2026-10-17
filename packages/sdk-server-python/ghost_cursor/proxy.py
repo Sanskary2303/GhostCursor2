@@ -179,6 +179,26 @@ class GhostCursorBackend:
         response = await self._tool_loop(response, user_id)
         return self._filter_response(response)
 
+    async def get_suggestions(
+        self,
+        current_page: str,
+        available_targets: Optional[list] = None,
+        count: int = 3,
+        user_id: str = "anonymous",
+    ) -> list[str]:
+        """Fetch page-contextual suggested questions for quick prompt chips."""
+        brain_content = await self.brain_loader.load_context(current_page)
+        body = {
+            "protocolVersion": "1",
+            "page": current_page or "dashboard",
+            "brain": brain_content[:32000],
+            "availableTargets": available_targets or [],
+            "count": count,
+        }
+        res = await self._post_to_cloud("/v1/suggestions", body, user_id)
+        return res.get("suggestions", [])
+
+
     async def _post_to_cloud(self, path: str, body: dict, subject: str) -> dict:
         """Make authenticated request to Ghost Cursor Cloud."""
         url = f"{self.service_url}{path}"

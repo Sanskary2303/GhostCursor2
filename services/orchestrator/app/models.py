@@ -328,3 +328,32 @@ class ErrorResponse(BaseModel):
     error: str
     code: str = "INTERNAL_ERROR"
     retryable: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Suggestions Models (Contextual Quick Prompts)
+# ---------------------------------------------------------------------------
+
+
+class SuggestionsRequest(BaseModel):
+    """
+    POST /v1/suggestions — retrieve page-contextual suggested questions.
+    """
+
+    protocolVersion: Literal["1"] = PROTOCOL_VERSION
+    page: str = Field(..., min_length=1, max_length=2000, description="Current page identifier")
+    brain: str = Field(..., min_length=1, max_length=32_000, description="Brain context for current page")
+    availableTargets: list[str] = Field(default_factory=list, max_length=100)
+    count: int = Field(default=3, ge=1, le=5, description="Number of suggestions to generate (2-3 recommended)")
+    clientConfig: Optional[ClientConfig] = Field(default=None)
+
+
+class SuggestionsResponse(BaseModel):
+    """
+    Response containing suggested questions for the user.
+    """
+
+    protocolVersion: Literal["1"] = PROTOCOL_VERSION
+    page: str
+    suggestions: list[str] = Field(default_factory=list, max_length=5)
+

@@ -5,6 +5,8 @@
 
 export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
   return `
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
     :host {
       --gc-primary: ${primaryColor};
       --gc-primary-light: ${primaryColor}22;
@@ -16,14 +18,22 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
       --gc-border: #e2e8f0;
       --gc-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
       --gc-radius: 16px;
-      --gc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      --gc-font: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       font-family: var(--gc-font);
       font-size: 14px;
       line-height: 1.5;
       color: var(--gc-text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: var(--gc-font);
+    }
+
 
     /* ── Toggle Button ─────────────────── */
     .gc-toggle {
@@ -162,14 +172,17 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
     .gc-messages::-webkit-scrollbar-thumb { background: var(--gc-border); border-radius: 3px; }
 
     .gc-msg {
-      max-width: 85%; padding: 12px 16px;
-      border-radius: 16px; font-size: 14px; line-height: 1.5;
-      animation: gc-fadeIn 0.3s ease;
+      max-width: 88%; padding: 12px 16px;
+      border-radius: 16px; font-size: 14px; line-height: 1.55;
+      animation: gc-fadeIn 0.25s ease;
+      word-break: break-word;
+      font-family: var(--gc-font);
     }
     .gc-msg.user {
       align-self: flex-end;
       background: var(--gc-primary); color: white;
       border-bottom-right-radius: 4px;
+      box-shadow: 0 2px 6px rgba(99, 102, 241, 0.2);
     }
     .gc-msg.assistant {
       align-self: flex-start;
@@ -177,11 +190,54 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
       border-bottom-left-radius: 4px;
       border: 1px solid var(--gc-border);
     }
+    .gc-msg.assistant p {
+      margin-bottom: 8px;
+    }
+    .gc-msg.assistant p:last-child {
+      margin-bottom: 0;
+    }
+    .gc-msg strong {
+      font-weight: 600;
+      color: inherit;
+    }
+    .gc-msg em {
+      font-style: italic;
+    }
+    .gc-msg code.gc-inline-code {
+      background: rgba(0, 0, 0, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #e11d48;
+    }
+    .gc-msg pre.gc-code-block {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 10px 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      margin: 8px 0;
+    }
+    .gc-msg ol.gc-list, .gc-msg ul.gc-list {
+      margin: 6px 0 6px 20px;
+      padding: 0;
+    }
+    .gc-msg li {
+      margin-bottom: 4px;
+      padding-left: 2px;
+    }
+    .gc-msg li:last-child {
+      margin-bottom: 0;
+    }
     .gc-msg.system {
       align-self: center; text-align: center;
       background: transparent; color: var(--gc-text-secondary);
       font-size: 12px; padding: 4px 12px;
     }
+
 
     /* ── Action Plan Card ─────────────────── */
     .gc-action-plan {
@@ -258,6 +314,40 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
       border-color: var(--gc-primary);
       background: var(--gc-primary-light);
       color: var(--gc-primary);
+    }
+
+    /* ── Suggested Quick Prompts ─────── */
+    .gc-suggestions {
+      padding: 8px 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      background: var(--gc-bg);
+      border-top: 1px solid var(--gc-border);
+      animation: gc-fadeIn 0.2s ease-out;
+    }
+    .gc-suggestion-chip {
+      background: var(--gc-card-bg, #f8fafc);
+      border: 1px solid var(--gc-border);
+      color: var(--gc-text);
+      font-size: 12px;
+      line-height: 1.3;
+      padding: 6px 11px;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+      font-family: var(--gc-font);
+      display: inline-flex;
+      align-items: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .gc-suggestion-chip:hover {
+      background: var(--gc-primary-light);
+      border-color: var(--gc-primary);
+      color: var(--gc-primary);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
     }
 
     /* ── Input Area ─────────────────── */

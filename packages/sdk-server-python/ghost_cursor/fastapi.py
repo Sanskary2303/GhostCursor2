@@ -119,5 +119,29 @@ def create_ghost_router(ghost, get_current_user=None) -> APIRouter:
             user_id=str(user.id),
         )
 
+    @router.get("/suggestions")
+    @router.post("/suggestions")
+    async def get_page_suggestions(request: Request):
+        """Get page-contextual suggested questions for quick prompt chips."""
+        user = await _get_user(request)
+        if request.method == "POST":
+            body = await request.json()
+            page = body.get("page", "")
+            targets = body.get("availableTargets", [])
+            count = body.get("count", 3)
+        else:
+            page = request.query_params.get("page", "")
+            targets = request.query_params.getlist("targets") if "targets" in request.query_params else []
+            count = int(request.query_params.get("count", 3))
+
+        suggestions = await ghost.get_suggestions(
+            current_page=page,
+            available_targets=targets,
+            count=count,
+            user_id=str(user.id),
+        )
+        return {"page": page, "suggestions": suggestions}
+
     return router
+
 

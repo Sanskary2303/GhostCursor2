@@ -30,6 +30,18 @@ class LLMProvider(ABC):
         """Continue generation after receiving tool/action results."""
         ...
 
+    @abstractmethod
+    async def generate_suggestions(
+        self,
+        page: str,
+        brain: str,
+        targets: list,
+        count: int = 3,
+        client_config: Optional[Any] = None,
+    ) -> list[str]:
+        """Generate contextual suggested questions for a page."""
+        ...
+
 
 class MockLLMProvider(LLMProvider):
     """Deterministic mock provider using the MockAgentProvider from agent.py.
@@ -55,6 +67,17 @@ class MockLLMProvider(LLMProvider):
 
     async def continue_with_results(self, run_state: dict, results: list) -> dict:
         return await self._agent.continue_with_results(run_state, results)
+
+    async def generate_suggestions(
+        self,
+        page: str,
+        brain: str,
+        targets: list,
+        count: int = 3,
+        client_config: Optional[Any] = None,
+    ) -> list[str]:
+        return await self._agent.generate_suggestions(page, brain, targets, count, client_config)
+
 
 
 class VertexAILLMProvider(LLMProvider):
@@ -214,6 +237,76 @@ Values on Screen: {context.get('values', {})}
         from ..agent import MockAgentProvider
         fallback = MockAgentProvider()
         return await fallback.continue_with_results(run_state, results)
+
+    async def generate_suggestions(
+        self,
+        page: str,
+        brain: str,
+        targets: list,
+        count: int = 3,
+        client_config: Optional[Any] = None,
+    ) -> list[str]:
+        """Generate 2-3 page-contextual suggested questions using Gemini."""
+        app_name = "this application"
+        if client_config:
+            if hasattr(client_config, "app_name"):
+                app_name = client_config.app_name or "this application"
+            elif isinstance(client_config, dict):
+                app_name = client_config.get("appName") or client_config.get("app_name") or "this application"
+
+        system_instruction = f"""You are the suggestions generator for Ghost Cursor, an autonomous UI co-pilot on {app_name}.
+Your job is to generate exactly {count} realistic, high-intent questions or actions that a user visiting this specific page would ask.
+
+### RULES:
+1. Every suggestion must be strictly relevant to the current page, registered UI targets, and business knowledge (Brain).
+2. Suggestions must be short, clear, and written from the user's perspective (e.g. "Do you have size 10?", "Switch to dark mode", "Track order SH-1024").
+3. Suggestions MUST be completely in-scope for this application. Never suggest off-topic questions.
+4. Output MUST be a valid JSON array of strings, e.g. ["Question 1", "Question 2", "Question 3"]. No extra markdown, explanations, or commentary.
+"""
+
+        prompt = f"""Current Page: {page}
+Available UI Targets: {targets}
+
+Business Knowledge (Brain):
+{brain}
+
+Output strictly a JSON list of {count} suggested questions."""
+
+        try:
+            from google import genai
+            from google.genai import types
+
+            use_vertex = bool(self.project_id) or not bool(self.api_key)
+            client = genai.Client(
+                vertexai=use_vertex,
+                project=self.project_id,
+                location=self.location,
+                api_key=self.api_key if not use_vertex else None,
+            )
+
+            response = await client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                    response_mime_type="application/json",
+                ),
+            )
+            raw = (response.text or "").strip()
+            import json
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(q).strip() for q in parsed if str(q).strip()][:count]
+            elif isinstance(parsed, dict) and "suggestions" in parsed:
+                return [str(q).strip() for q in parsed["suggestions"]][:count]
+        except Exception as e:
+            logger.warning(f"Failed to generate suggestions via Gemini ({e}). Falling back to pattern generator.")
+
+        from ..agent import MockAgentProvider
+        fallback = MockAgentProvider()
+        return await fallback.generate_suggestions(page, brain, targets, count, client_config)
+
 
 
 def get_llm_provider() -> LLMProvider:

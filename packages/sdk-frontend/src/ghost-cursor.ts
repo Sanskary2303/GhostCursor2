@@ -46,6 +46,7 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
   let pendingActions: ActionItem[] = [];
   let isExecuting = false;
   let disposed = false;
+  let lastLoadedPage = '';
 
   // Initialize widget
   const widget = new GhostCursorWidget(
@@ -60,6 +61,36 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
     },
     theme.icon,
   );
+
+  async function loadSuggestionsForCurrentPage(force: boolean = false): Promise<void> {
+    if (disposed || isExecuting) return;
+    const page = getPage();
+    if (!force && page === lastLoadedPage) return;
+    lastLoadedPage = page;
+    try {
+      const activeTargets = Object.keys(targets);
+      const suggestions = await apiClient.getSuggestions(page, activeTargets);
+      if (!disposed && suggestions && suggestions.length > 0) {
+        widget.setSuggestions(suggestions);
+      } else {
+        widget.clearSuggestions();
+      }
+    } catch {
+      widget.clearSuggestions();
+    }
+  }
+
+  // Auto-detect page navigation
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', () => loadSuggestionsForCurrentPage());
+  }
+  const pageCheckInterval = setInterval(() => {
+    if (!disposed) loadSuggestionsForCurrentPage();
+  }, 1200);
+
+  // Initial suggestions fetch
+  loadSuggestionsForCurrentPage();
+
 
   async function handleSendMessage(message: string): Promise<void> {
     if (disposed || isExecuting) return;
@@ -278,10 +309,12 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
   return {
     dispose() {
       disposed = true;
+      clearInterval(pageCheckInterval);
       widget.dispose();
       cursorEngine.dispose();
       tourEngine.dispose();
     },
+
     open() {
       widget.open();
     },

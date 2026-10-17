@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .models import CreateRunRequest, ContinueRunRequest, RunResponse
+from .models import CreateRunRequest, ContinueRunRequest, RunResponse, SuggestionsRequest, SuggestionsResponse
 from .run_manager import RunManager
 from .storage.memory import MemoryRunStore
 from .llm.provider import MockLLMProvider
@@ -218,4 +218,46 @@ async def continue_run(run_id: str, request: Request):
     run_manager: RunManager = request.app.state.run_manager
     result = await run_manager.continue_run(run_id, tenant_id, subject, req)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Suggestions Endpoint
+# ---------------------------------------------------------------------------
+@app.post("/v1/suggestions", response_model=SuggestionsResponse)
+async def get_suggestions(request: Request):
+    """Generate page-contextual suggested questions for quick prompt chips."""
+    tenant_id = _authenticate(request)
+
+    if _check_rate_limit(tenant_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+
+    body = await request.json()
+    try:
+        req = SuggestionsRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)[:200]}")
+
+    from .tenant_config import get_tenant_config, extract_brain_config
+    brain_cfg = extract_brain_config(req.brain)
+    req_overrides = req.clientConfig.model_dump(exclude_none=True) if getattr(req, "clientConfig", None) else {}
+    effective_config = {**brain_cfg, **req_overrides}
+    tenant_cfg = get_tenant_config(tenant_id, effective_config)
+
+    run_manager: RunManager = request.app.state.run_manager
+    provider = run_manager.provider
+
+    suggestions = await provider.generate_suggestions(
+        page=req.page,
+        brain=req.brain,
+        targets=req.availableTargets,
+        count=req.count,
+        client_config=tenant_cfg,
+    )
+
+    return SuggestionsResponse(
+        protocolVersion="1",
+        page=req.page,
+        suggestions=suggestions,
+    )
+
 

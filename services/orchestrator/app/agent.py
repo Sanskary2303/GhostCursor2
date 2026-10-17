@@ -325,3 +325,51 @@ class MockAgentProvider:
             "status": "completed",
         }
 
+    async def generate_suggestions(
+        self,
+        page: str,
+        brain: str,
+        targets: list,
+        count: int = 3,
+        client_config: Optional[Any] = None,
+    ) -> list[str]:
+        """Generate contextual suggested questions for quick prompt chips."""
+        page_lower = page.lower()
+        if "product" in page_lower:
+            return [
+                "What sizes are available in stock?",
+                "Can you add this item to my cart in size 10?",
+                "What is your 30-day return policy?"
+            ][:count]
+        elif "cart" in page_lower:
+            return [
+                "Can you apply promo code SAVE20?",
+                "What is the shipping cost?",
+                "Take me to checkout"
+            ][:count]
+        elif "checkout" in page_lower:
+            return [
+                "Fill in my shipping address",
+                "What payment methods do you accept?",
+                "Is shipping free for this order?"
+            ][:count]
+        elif "orders" in page_lower:
+            return [
+                "Where is my order SH-1024?",
+                "Show me how to track returns",
+                "How long does refund processing take?"
+            ][:count]
+        elif "settings" in page_lower:
+            return [
+                "Switch appearance to Dark Mode",
+                "How do I update notification preferences?",
+                "Where can I change my shipping address?"
+            ][:count]
+        else:
+            return [
+                "Show me popular running shoes",
+                "Do you offer free shipping?",
+                "Switch to Dark Mode"
+            ][:count]
+
+

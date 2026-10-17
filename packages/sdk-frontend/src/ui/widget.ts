@@ -25,6 +25,7 @@ export class GhostCursorWidget {
   private messagesEl!: HTMLElement;
   private textareaEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLElement;
+  private suggestionsEl!: HTMLElement;
   private isOpen = false;
   private callbacks: WidgetCallbacks;
   private disabled = false;
@@ -92,6 +93,7 @@ export class GhostCursorWidget {
           Hi! I'm Ghost Cursor, your AI co-pilot. I can navigate the app, fill forms, and answer questions for you. What would you like to do? 🚀
         </div>
       </div>
+      <div class="gc-suggestions" style="display: none;"></div>
       <div class="gc-input-area">
         <textarea class="gc-textarea" placeholder="Ask me anything..." rows="1" aria-label="Type your message"></textarea>
         <button class="gc-send-btn" aria-label="Send message">↑</button>
@@ -101,6 +103,7 @@ export class GhostCursorWidget {
 
     // Cache elements
     this.messagesEl = this.panel.querySelector('.gc-messages')!;
+    this.suggestionsEl = this.panel.querySelector('.gc-suggestions')!;
     this.textareaEl = this.panel.querySelector('.gc-textarea')!;
     this.sendBtn = this.panel.querySelector('.gc-send-btn')!;
 
@@ -139,12 +142,45 @@ export class GhostCursorWidget {
     if (this.disabled) return;
     const msg = this.textareaEl.value.trim();
     if (!msg) return;
+    this.clearSuggestions();
     this.textareaEl.value = '';
     this.textareaEl.style.height = 'auto';
     this.callbacks.onSendMessage(msg);
   }
 
   // ── Public API ──
+
+  /** Set suggested questions quick prompts. */
+  setSuggestions(suggestions: string[]): void {
+    if (!this.suggestionsEl) return;
+    if (!suggestions || suggestions.length === 0) {
+      this.clearSuggestions();
+      return;
+    }
+
+    this.suggestionsEl.innerHTML = '';
+    suggestions.slice(0, 3).forEach(text => {
+      const chip = document.createElement('button');
+      chip.className = 'gc-suggestion-chip';
+      chip.textContent = text;
+      chip.addEventListener('click', () => {
+        this.clearSuggestions();
+        this.callbacks.onSendMessage(text);
+      });
+      this.suggestionsEl.appendChild(chip);
+    });
+
+    this.suggestionsEl.style.display = 'flex';
+  }
+
+  /** Clear and hide suggested questions chips. */
+  clearSuggestions(): void {
+    if (this.suggestionsEl) {
+      this.suggestionsEl.innerHTML = '';
+      this.suggestionsEl.style.display = 'none';
+    }
+  }
+
 
   /** Add a user message bubble. */
   addUserMessage(text: string): void {
@@ -160,7 +196,7 @@ export class GhostCursorWidget {
     this.removeLoading();
     const div = document.createElement('div');
     div.className = 'gc-msg assistant';
-    div.textContent = text;
+    div.innerHTML = this.renderMarkdown(text);
     this.messagesEl.appendChild(div);
     this.scrollToBottom();
   }
@@ -248,7 +284,7 @@ export class GhostCursorWidget {
 
 
     div.innerHTML = `
-      <div class="gc-msg assistant">${this.escapeHtml(question.question)}</div>
+      <div class="gc-msg assistant">${this.renderMarkdown(question.question)}</div>
       ${optionsHtml}
     `;
 
@@ -307,6 +343,106 @@ export class GhostCursorWidget {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  /** Convert markdown into sanitized, formatted HTML */
+  private renderMarkdown(raw: string): string {
+    if (!raw) return '';
+
+    // HTML-escape to ensure XSS safety
+    const escaped = this.escapeHtml(raw);
+
+    const lines = escaped.split('\n');
+    const result: string[] = [];
+    let inList: 'ul' | 'ol' | null = null;
+    let inCodeBlock = false;
+    let codeBlockContent: string[] = [];
+
+    const closeList = () => {
+      if (inList === 'ul') {
+        result.push('</ul>');
+        inList = null;
+      } else if (inList === 'ol') {
+        result.push('</ol>');
+        inList = null;
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Code blocks ```
+      if (line.trim().startsWith('```')) {
+        if (inCodeBlock) {
+          result.push(`<pre class="gc-code-block"><code>${codeBlockContent.join('\n')}</code></pre>`);
+          codeBlockContent = [];
+          inCodeBlock = false;
+        } else {
+          closeList();
+          inCodeBlock = true;
+        }
+        continue;
+      }
+
+      if (inCodeBlock) {
+        codeBlockContent.push(line);
+        continue;
+      }
+
+      // Check unordered list item (- item or * item)
+      const ulMatch = line.match(/^(\s*)[-*]\s+(.+)$/);
+      if (ulMatch) {
+        if (inList !== 'ul') {
+          closeList();
+          result.push('<ul class="gc-list">');
+          inList = 'ul';
+        }
+        result.push(`<li>${this.formatInlineMarkdown(ulMatch[2])}</li>`);
+        continue;
+      }
+
+      // Check ordered list item (1. item)
+      const olMatch = line.match(/^(\s*)\d+\.\s+(.+)$/);
+      if (olMatch) {
+        if (inList !== 'ol') {
+          closeList();
+          result.push('<ol class="gc-list">');
+          inList = 'ol';
+        }
+        result.push(`<li>${this.formatInlineMarkdown(olMatch[2])}</li>`);
+        continue;
+      }
+
+      // Regular line: close any open list
+      closeList();
+
+      if (line.trim() === '') {
+        result.push('<div style="height: 6px;"></div>');
+      } else {
+        result.push(`<p>${this.formatInlineMarkdown(line)}</p>`);
+      }
+    }
+
+    if (inCodeBlock && codeBlockContent.length > 0) {
+      result.push(`<pre class="gc-code-block"><code>${codeBlockContent.join('\n')}</code></pre>`);
+    }
+    closeList();
+
+    return result.join('');
+  }
+
+  private formatInlineMarkdown(text: string): string {
+    return text
+      // Inline code: `code`
+      .replace(/`([^`]+)`/g, '<code class="gc-inline-code">$1</code>')
+      // Bold + Italic: ***text***
+      .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+      // Bold: **text** or __text__
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      // Italic: *text* or _text_
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/_([^_]+)_/g, '<em>$1</em>');
   }
 
   /** Open the chat panel. */
