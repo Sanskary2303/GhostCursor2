@@ -1,0 +1,1 @@
+# Ghost Cursor Storage Package

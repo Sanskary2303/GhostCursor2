@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.python-version
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+*.whl
+*.tar.gz
+test-results/
+
+# Environment
+.env
+.env.local
+.env.production
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Next.js
+.next/
+
+# Test artifacts
+coverage/
+.pytest_cache/
+htmlcov/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+# Docker
+docker-compose.override.yml
+
+# SQLite local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
