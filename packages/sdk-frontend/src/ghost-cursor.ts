@@ -215,7 +215,7 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
         const eventId = crypto.randomUUID();
         const context = contextProvider.scanContext(getPage());
         const response = await apiClient.continueRun(
-          currentRunId, eventId, currentRevision, 'action_results', results, undefined, context
+          currentRunId, eventId, currentRevision, 'actions', results, undefined, context
         );
         handleResponse(response);
       } else {

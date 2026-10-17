@@ -74,6 +74,7 @@ class ContinueKind(str, Enum):
 
     TOOLS = "tools"
     ACTIONS = "actions"
+    ACTION_RESULTS = "action_results"
     ANSWER = "answer"
     CANCEL = "cancel"
 
@@ -182,9 +183,17 @@ class ResultItem(BaseModel):
     """Result of executing an action or tool call, sent by the client."""
 
     id: str = Field(..., min_length=1, max_length=120)
-    ok: bool
+    ok: bool = True
     output: Optional[Any] = None
     error: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_ok(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "ok" not in data and "success" in data:
+                data["ok"] = bool(data["success"])
+        return data
 
     @field_validator("id")
     @classmethod
@@ -265,10 +274,18 @@ class ContinueRunRequest(BaseModel):
         description="Updated context snapshot (optional)",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_kind(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if data.get("kind") == "action_results":
+                data["kind"] = "actions"
+        return data
+
     @model_validator(mode="after")
     def validate_kind_payload(self) -> "ContinueRunRequest":
         """Validate that the payload matches the declared kind."""
-        if self.kind in (ContinueKind.TOOLS, ContinueKind.ACTIONS):
+        if self.kind in (ContinueKind.TOOLS, ContinueKind.ACTIONS, ContinueKind.ACTION_RESULTS):
             if not self.results:
                 raise ValueError(
                     f"kind='{self.kind.value}' requires non-empty results"

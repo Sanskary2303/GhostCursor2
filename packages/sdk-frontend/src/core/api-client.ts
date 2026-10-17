@@ -63,10 +63,12 @@ export class ApiClient {
     answer?: string,
     context?: GhostContext,
   ): Promise<RunResponse> {
-    const normalizedKind = kind === 'actions' ? 'action_results' : kind;
+    const normalizedKind = (kind === 'action_results' || kind === 'actions') ? 'actions' : kind;
     const normalizedResults = results?.map(r => ({
       id: r.id,
+      ok: r.ok ?? r.success ?? true,
       success: r.success ?? r.ok ?? true,
+      output: r.output,
       error: r.error,
     }));
 
@@ -79,7 +81,7 @@ export class ApiClient {
       kind: normalizedKind,
     };
 
-    if (normalizedKind === 'action_results' && normalizedResults) {
+    if (normalizedKind === 'actions' && normalizedResults) {
       body.results = normalizedResults;
     }
     if (normalizedKind === 'answer' && answer !== undefined) {

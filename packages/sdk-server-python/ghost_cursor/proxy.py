@@ -163,12 +163,30 @@ class GhostCursorBackend:
     async def _handle_continue(self, payload: dict, user_id: str) -> dict:
         """Handle continuation (action results, answers, cancellation)."""
         run_id = payload.get("runId", "")
+        raw_kind = payload.get("kind", "actions")
+        if raw_kind in ("action_results", "actions"):
+            kind = "actions"
+        else:
+            kind = raw_kind
+
+        raw_results = payload.get("results", [])
+        normalized_results = []
+        for r in raw_results:
+            if isinstance(r, dict):
+                ok = r.get("ok") if "ok" in r else r.get("success", True)
+                normalized_results.append({
+                    "id": r.get("id"),
+                    "ok": bool(ok),
+                    "output": r.get("output"),
+                    "error": r.get("error"),
+                })
+
         body = {
             "protocolVersion": "1",
             "eventId": payload.get("eventId", str(uuid.uuid4())),
             "revision": payload.get("revision", 0),
-            "kind": payload.get("kind", "actions"),
-            "results": payload.get("results", []),
+            "kind": kind,
+            "results": normalized_results,
         }
         if payload.get("answer"):
             body["answer"] = payload["answer"]

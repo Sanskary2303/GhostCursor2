@@ -123,22 +123,26 @@ class MockAgentProvider:
         msg = message.lower().strip()
         page = context.get("page", "")
 
-        # --- Dark mode / theme ---
-        if any(kw in msg for kw in ["dark mode", "dark theme", "switch theme", "appearance"]):
+        # --- Dark mode / Light mode / theme ---
+        if any(kw in msg for kw in ["dark mode", "dark theme", "switch theme", "appearance", "light mode", "light theme", "light"]):
             actions = []
+            is_dark = "dark" in msg
+            if "light" in msg:
+                is_dark = False
+            theme_name = "Dark" if is_dark else "Light"
             if page != "settings":
                 actions.append({
                     "id": "act_1",
                     "tool": "navigate",
-                    "parameters": {"target_page": "settings", "explanation": "Navigating to Settings to change the theme."},
+                    "parameters": {"target_page": "settings", "explanation": f"Navigating to Settings to change appearance to {theme_name} Mode."},
                 })
             actions.append({
                 "id": "act_2" if actions else "act_1",
                 "tool": "toggle_switch",
-                "parameters": {"target_id": "settings.theme_toggle", "state": True, "explanation": "Switching the appearance to Dark Mode."},
+                "parameters": {"target_id": "settings.theme_toggle", "state": is_dark, "explanation": f"Switching the appearance to {theme_name} Mode."},
             })
             return {
-                "reply": "I'll switch the appearance to Dark Mode for you.",
+                "reply": f"I'll switch the appearance to {theme_name} Mode for you.",
                 "actions": actions,
                 "status": "awaiting_actions",
             }
@@ -308,7 +312,7 @@ class MockAgentProvider:
         # For tool results, generate a summary reply
         all_ok = all(r.get("ok", False) for r in results)
         if all_ok:
-            outputs = [r.get("output", "") for r in results if r.get("output")]
+            outputs = [r.get("output", "") for r in results if r.get("output") and str(r.get("output")).lower() != "completed"]
             if outputs:
                 reply = f"Here's what I found: {'; '.join(str(o) for o in outputs)}"
             else:

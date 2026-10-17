@@ -189,7 +189,7 @@ class RunManager:
 
         # Validate continuation kind matches expected status
         expected_kinds = {
-            "awaiting_actions": ["actions", "cancel"],
+            "awaiting_actions": ["actions", "action_results", "cancel"],
             "awaiting_answer": ["answer", "cancel"],
             "awaiting_tools": ["tools", "cancel"],
         }

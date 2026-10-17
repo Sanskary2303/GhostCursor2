@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
@@ -157,7 +158,7 @@ or querying customer backend knowledge tools for customer database and business 
 ### STRICT SCOPE & GUARDRAILS:
 You are strictly limited to THIS application ({app_name}).
 Allowed scope:
-1. Navigating and operating this {app_type}'s user interface (clicking, typing, selecting, guided tours).
+1. Navigating and operating this {app_type}'s user interface (clicking, typing, selecting, guided tours, toggling settings).
 2. Assisting users with workflows, tasks, and features available within this application.
 3. Answering questions directly grounded in the provided BUSINESS KNOWLEDGE (Brain) or current screen context.
 4. Calling registered customer backend tools when domain data is required.
@@ -184,13 +185,46 @@ You MUST reply straightforwardly with:
 Page: {context.get('page', 'unknown')}
 Values on Screen: {context.get('values', {})}
 
-### NON-NEGOTIABLE RULES:
-1. ONLY use target IDs that are explicitly present in REGISTERED AVAILABLE UI TARGETS.
-2. If an action requires moving to another page first, invoke 'navigate' before interacting with page targets.
-3. If user intent is ambiguous or missing required fields, invoke 'ask_clarification'.
-4. Query customer backend tools (e.g. lookup_order, check_warehouse_stock, simulate_discount_roi) whenever domain data is needed before taking action.
-5. If the request is out of scope, refuse it immediately without invoking any tools.
-6. Return strictly valid tool invocations.
+### FRONTEND ACTION TOOLS AVAILABLE:
+- navigate: {{"target_page": "<page_name>", "explanation": "<reason>"}}
+  * Switch pages (e.g. "settings", "cart", "orders", "checkout", "/").
+- click: {{"target_id": "<registered_target_id>", "explanation": "<reason>"}}
+  * Click a button, link, or tab explicitly registered in UI targets.
+- fill_input: {{"target_id": "<registered_target_id>", "value": "<text_or_number>", "explanation": "<reason>"}}
+  * Type text into an input field.
+- select_option: {{"target_id": "<registered_target_id>", "option": "<option_value>", "explanation": "<reason>"}}
+  * Select an option from a dropdown.
+- toggle_switch: {{"target_id": "<registered_target_id>", "state": true|false, "explanation": "<reason>"}}
+  * Toggle a switch/checkbox. E.g. For appearance/theme: Dark Mode = true, Light Mode = false.
+- guided_tour: {{"steps": [{{"target_id": "<target_id>", "message": "<step_message>"}}]}}
+  * Guide the user with spotlight callouts.
+
+### PROTOCOL EXECUTION RULES:
+1. When the user requests a UI action (e.g. turn website to light mode, switch to dark mode, add to cart, fill form):
+   - You MUST populate `actions` with the step-by-step action sequence.
+   - If the user is not on the required page yet (e.g. not on 'settings' page for appearance settings), include a `navigate` action first!
+   - In `reply`, provide a short, friendly conversational sentence explaining what you will do (e.g. "I'll switch the website to Light Mode for you."). NEVER put raw JSON or code blocks in `reply`!
+   - Set `status` to "awaiting_actions".
+2. If asking clarification, populate `questions` (with `question` and `options`) and set `status` to "awaiting_answer".
+3. If calling registered backend tools (e.g. lookup_order), populate `toolCalls` and set `status` to "awaiting_tools".
+4. If answering a question or refusing an out-of-scope query, set `actions`: [], `questions`: [], `toolCalls`: [], `status`: "completed", and put the text response in `reply`.
+5. Discrete plan constraint: Only ONE of `actions`, `questions`, or `toolCalls` can be non-empty in a response.
+
+### OUTPUT JSON SCHEMA:
+Output strictly a valid JSON object matching this schema:
+{{
+  "reply": "Conversational message for the user bubble",
+  "status": "awaiting_actions" | "awaiting_answer" | "awaiting_tools" | "completed",
+  "actions": [
+    {{
+      "id": "act_1",
+      "tool": "navigate" | "click" | "fill_input" | "select_option" | "toggle_switch" | "guided_tour",
+      "parameters": {{ ... }}
+    }}
+  ],
+  "questions": [],
+  "toolCalls": []
+}}
 """
         # Try importing and using google.genai or vertexai SDK
         try:
@@ -205,19 +239,144 @@ Values on Screen: {context.get('values', {})}
                 api_key=self.api_key if not use_vertex else None,
             )
 
-            # Generate content
+            # Generate content with structured JSON enforcement
             response = await client.aio.models.generate_content(
                 model=self.model_name,
                 contents=message,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.2,
+                    response_mime_type="application/json",
                 ),
             )
 
-            text_reply = response.text or ""
+            raw_text = (response.text or "").strip()
+            logger.info(f"Vertex AI raw response: {raw_text[:200]}")
+
+            # Strip markdown fences if present
+            cleaned = raw_text
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+                cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+
+            parsed = None
+            try:
+                parsed = json.loads(cleaned)
+            except Exception as pe:
+                logger.warning(f"Direct JSON parse failed ({pe}), attempting regex extraction.")
+                match = re.search(r"(\{|\[).+(\}|\])", cleaned, re.DOTALL)
+                if match:
+                    try:
+                        parsed = json.loads(match.group(0))
+                    except Exception:
+                        parsed = None
+
+            # 1. If parsed is a list of actions/tool calls (e.g. [{"name": "navigate", ...}] or [{"tool": "navigate", ...}])
+            if isinstance(parsed, list):
+                actions = []
+                for idx, item in enumerate(parsed):
+                    if not isinstance(item, dict):
+                        continue
+                    tool = item.get("tool") or item.get("name") or item.get("action") or "navigate"
+                    raw_params = item.get("parameters") or item.get("arguments") or item
+                    params = {}
+                    if tool == "navigate":
+                        target = raw_params.get("target_page") or raw_params.get("path") or raw_params.get("page") or "settings"
+                        params["target_page"] = str(target).lstrip("/")
+                        params["explanation"] = raw_params.get("explanation") or f"Navigating to {params['target_page']}."
+                    elif tool == "toggle_switch":
+                        params["target_id"] = raw_params.get("target_id") or "settings.theme_toggle"
+                        params["state"] = bool(raw_params.get("state", False))
+                        params["explanation"] = raw_params.get("explanation") or "Toggling switch."
+                    else:
+                        params = {k: v for k, v in raw_params.items() if k not in ("tool", "name", "action", "id")}
+
+                    actions.append({
+                        "id": f"act_{idx + 1}",
+                        "tool": tool,
+                        "parameters": params,
+                    })
+
+                friendly_reply = "I'll perform the requested actions for you."
+                if any("theme" in str(a) or "settings" in str(a) for a in actions):
+                    friendly_reply = "I'll update the appearance settings for you."
+
+                return {
+                    "reply": friendly_reply,
+                    "questions": [],
+                    "actions": actions,
+                    "toolCalls": [],
+                    "status": "awaiting_actions" if actions else "completed",
+                }
+
+            # 2. If parsed is a dict (standard Ghost Cursor plan or variant)
+            if isinstance(parsed, dict):
+                reply = parsed.get("reply")
+                actions = parsed.get("actions", [])
+                questions = parsed.get("questions", [])
+                tool_calls = parsed.get("toolCalls") or parsed.get("tool_calls", [])
+
+                # If reply itself was accidentally set to raw JSON code block, clean it up
+                if reply and (reply.strip().startswith("```") or reply.strip().startswith("{") or reply.strip().startswith("[")):
+                    if actions:
+                        reply = "I'll perform the planned actions for you."
+                    elif questions:
+                        reply = None
+                    else:
+                        reply = "Here is what I found."
+
+                # Normalize actions
+                normalized_actions = []
+                for idx, a in enumerate(actions):
+                    if not isinstance(a, dict):
+                        continue
+                    a_id = a.get("id") or f"act_{idx + 1}"
+                    a_tool = a.get("tool") or a.get("name") or a.get("action") or "navigate"
+                    a_params = a.get("parameters") or a.get("arguments") or {}
+                    if a_tool == "navigate" and "path" in a_params and "target_page" not in a_params:
+                        a_params["target_page"] = str(a_params.pop("path")).lstrip("/")
+                    elif a_tool == "navigate" and "target_page" in a_params:
+                        a_params["target_page"] = str(a_params["target_page"]).lstrip("/")
+                    normalized_actions.append({
+                        "id": a_id,
+                        "tool": a_tool,
+                        "parameters": a_params,
+                    })
+
+                # Determine discrete plan status
+                if normalized_actions:
+                    status = "awaiting_actions"
+                    questions = []
+                    tool_calls = []
+                    if not reply:
+                        reply = "I'll execute the planned actions for you."
+                elif questions:
+                    status = "awaiting_answer"
+                    normalized_actions = []
+                    tool_calls = []
+                elif tool_calls:
+                    status = "awaiting_tools"
+                    normalized_actions = []
+                    questions = []
+                else:
+                    status = "completed"
+                    normalized_actions = []
+                    questions = []
+                    tool_calls = []
+                    if not reply:
+                        reply = raw_text
+
+                return {
+                    "reply": reply,
+                    "questions": questions,
+                    "actions": normalized_actions,
+                    "toolCalls": tool_calls,
+                    "status": status,
+                }
+
+            # 3. Plain text fallback (direct conversational answer, refusal, etc.)
             return {
-                "reply": text_reply,
+                "reply": raw_text,
                 "questions": [],
                 "actions": [],
                 "toolCalls": [],
@@ -230,7 +389,7 @@ Values on Screen: {context.get('values', {})}
             # Resilient fallback so application never crashes
             from ..agent import MockAgentProvider
             fallback = MockAgentProvider()
-            return await fallback.generate(message, context, brain, targets, tools)
+            return await fallback.generate(message, context, brain, targets, tools, client_config)
 
     async def continue_with_results(self, run_state: dict, results: list) -> dict:
         """Continue agent loop with tool results or action receipts."""
