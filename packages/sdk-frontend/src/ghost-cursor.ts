@@ -143,6 +143,15 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
     // Close the chat interface so it does not hide elements on screen while actions execute
     widget.close();
 
+    // Undock the cursor from the bubble docking station (hides solid cursor, keeps dotted cradle)
+    widget.setDocked(false);
+
+    // Launch animated cursor outward from the docking station
+    try {
+      const toggleRect = widget.getToggleRect();
+      await cursorEngine.launchFrom(toggleRect);
+    } catch { /* proceed if animation skipped */ }
+
     try {
       const results = await executeActions(
         pendingActions,
@@ -155,7 +164,16 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
         },
       );
 
-      cursorEngine.hide();
+      // Return cursor back to bubble and dock into the station
+      try {
+        await cursorEngine.dockTo(widget.getToggleRect());
+      } catch { /* proceed if animation skipped */ }
+
+      // Re-appear the solid cursor inside the bubble docking station
+      widget.setDocked(true);
+
+      // Brief pause for docking settle
+      await new Promise(r => setTimeout(r, 250));
 
       // Reopen the chat interface once actions are complete to display response
       widget.open();
@@ -175,6 +193,7 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
         widget.setInputDisabled(false);
       }
     } catch (error) {
+      widget.setDocked(true);
       widget.open();
       widget.addAssistantMessage('An error occurred during execution.');
       widget.setInputDisabled(false);
@@ -182,6 +201,7 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
       isExecuting = false;
       pendingActions = [];
       cursorEngine.hide();
+      widget.setDocked(true);
     }
   }
 
@@ -223,6 +243,7 @@ export function createGhostCursor(config: GhostCursorConfig): GhostCursorInstanc
   function handleStop(): void {
     isExecuting = false;
     cursorEngine.hide();
+    widget.setDocked(true);
     widget.addSystemMessage('Stopped. Applied changes remain.');
     widget.setInputDisabled(false);
   }

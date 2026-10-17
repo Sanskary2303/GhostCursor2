@@ -319,9 +319,16 @@ export class GhostCursorWidget {
     if (this.isOpen) this.toggle();
   }
 
-  /** Check if the chat panel is currently open. */
-  getIsOpen(): boolean {
-    return this.isOpen;
+  /** Set docking state (undocked hides the solid cursor inside the toggle button). */
+  setDocked(docked: boolean): void {
+    if (this.toggleBtn) {
+      this.toggleBtn.classList.toggle('undocked', !docked);
+    }
+  }
+
+  /** Get the bounding rectangle of the floating toggle button. */
+  getToggleRect(): DOMRect {
+    return this.toggleBtn.getBoundingClientRect();
   }
 
   /** Remove widget from DOM. */

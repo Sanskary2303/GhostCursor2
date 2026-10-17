@@ -62,6 +62,25 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
       height: 100%;
       display: block;
     }
+    .gc-solid-cursor {
+      transition: opacity 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      transform-origin: 325px 152px;
+    }
+    .gc-toggle.undocked .gc-solid-cursor {
+      opacity: 0;
+      transform: scale(0.2) translate(-100px, -100px);
+    }
+    .gc-dotted-boundary {
+      transition: opacity 0.3s ease;
+    }
+    .gc-toggle.undocked .gc-dotted-boundary {
+      opacity: 0.9;
+      animation: gc-dock-pulse 2s infinite ease-in-out;
+    }
+    @keyframes gc-dock-pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; filter: drop-shadow(0 0 4px rgba(255, 107, 53, 0.6)); }
+    }
     .gc-toggle-close {
       font-size: 24px;
       color: white;
@@ -95,8 +114,10 @@ export function getWidgetStyles(primaryColor: string = '#6366f1'): string {
     .gc-header {
       display: flex; align-items: center; gap: 12px;
       padding: 16px 20px;
-      background: var(--gc-primary);
+      background: #3730a3;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.28) 0%, rgba(15, 23, 42, 0.42) 100%), var(--gc-primary);
       color: white;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.15);
     }
     .gc-header-avatar {
       width: 36px; height: 36px; border-radius: 10px;
