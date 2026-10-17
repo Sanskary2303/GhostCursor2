@@ -209,6 +209,17 @@ class ResultItem(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ClientConfig(BaseModel):
+    """
+    Client-specific configuration overrides (optional).
+    Allows frontends to customize the application name, type, and guardrail messaging.
+    """
+
+    appName: Optional[str] = Field(default=None, max_length=120, description="Display name of the host application")
+    appType: Optional[str] = Field(default=None, max_length=120, description="Category/type (e.g. CRM, dashboard, store, banking)")
+    outOfScopeMessage: Optional[str] = Field(default=None, max_length=1000, description="Custom out-of-scope refusal message")
+
+
 class CreateRunRequest(BaseModel):
     """
     POST /v1/runs — create a new reasoning run.
@@ -226,6 +237,8 @@ class CreateRunRequest(BaseModel):
     )
     capabilities: list[str] = Field(default_factory=list)
     tools: list[ToolDeclaration] = Field(default_factory=list)
+    clientConfig: Optional[ClientConfig] = Field(default=None, description="Optional client-level configuration overrides")
+
 
 
 class ContinueRunRequest(BaseModel):

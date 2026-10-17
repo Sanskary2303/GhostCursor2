@@ -121,12 +121,21 @@ class RunManager:
 
         # Run initial planning
         try:
+            from .tenant_config import get_tenant_config, extract_brain_config
+            # Approach C: Extract client configuration directly from customer's Brain document
+            brain_cfg = extract_brain_config(run.brain)
+            req_overrides = req.clientConfig.model_dump(exclude_none=True) if getattr(req, "clientConfig", None) else {}
+            effective_config = {**brain_cfg, **req_overrides}
+            tenant_cfg = get_tenant_config(tenant, effective_config)
+
+
             agent_result = await self.provider.generate(
                 message=req.message,
                 context=run.context,
                 brain=run.brain,
                 targets=run.context.get("availableTargets", []),
                 tools=run.tools,
+                client_config=tenant_cfg,
             )
             run.plan = agent_result
             run.status = agent_result.get("status", "completed")

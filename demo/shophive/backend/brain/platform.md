@@ -1,3 +1,9 @@
+---
+appName: ShopHive
+appType: footwear and sportswear store
+outOfScopeMessage: I am Ghost Cursor for ShopHive. I can only assist with shopping, footwear, orders, and navigating this store.
+---
+
 # ShopHive Platform Overview
 
 GHOST_BRAIN_SERVER_ONLY_CANARY_2026

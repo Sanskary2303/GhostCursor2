@@ -102,8 +102,24 @@ class MockAgentProvider:
     for local testing without real GCP/Gemini credentials.
     """
 
-    def _match_patterns(self, message: str, context: dict, targets: list) -> dict:
+    def _match_patterns(self, message: str, context: dict, targets: list, client_config: Optional[Any] = None) -> dict:
         """Pattern-match user messages to generate realistic tool call responses."""
+        from .guardrails import is_out_of_scope, get_guardrail_rejection
+
+        app_name = "this application"
+        refusal_msg = None
+        if client_config:
+            if hasattr(client_config, "app_name"):
+                app_name = client_config.app_name or "this application"
+                refusal_msg = client_config.get_refusal_message()
+            elif isinstance(client_config, dict):
+                app_name = client_config.get("appName") or client_config.get("app_name") or "this application"
+                refusal_msg = client_config.get("outOfScopeMessage") or client_config.get("out_of_scope_message")
+
+        # --- Guardrail check for out-of-scope queries ---
+        if is_out_of_scope(message):
+            return get_guardrail_rejection(refusal_msg)
+
         msg = message.lower().strip()
         page = context.get("page", "")
 
@@ -255,19 +271,28 @@ class MockAgentProvider:
             "orders": "You're viewing your order history. I can help you track a specific order or show you how returns work.",
             "settings": "You're on the settings page. I can help you change your theme, notification preferences, or update your shipping address.",
         }
-        default_reply = page_descriptions.get(
-            page,
-            f"I'm Ghost Cursor, your AI co-pilot for ShopHive! I can help you navigate the store, add items to your cart, track orders, and more. Just tell me what you'd like to do.",
+        generic_default = (
+            f"I'm Ghost Cursor, your AI co-pilot for {app_name}! I can help you navigate, "
+            "perform actions, and answer questions. Just tell me what you'd like to do."
         )
+        default_reply = page_descriptions.get(page, generic_default) if app_name == "ShopHive" else generic_default
         return {
             "reply": default_reply,
             "actions": [],
             "status": "completed",
         }
 
-    async def generate(self, message: str, context: dict, brain: str, targets: list, tools: list) -> dict:
+    async def generate(
+        self,
+        message: str,
+        context: dict,
+        brain: str,
+        targets: list,
+        tools: list,
+        client_config: Optional[Any] = None,
+    ) -> dict:
         """Generate a mock agent response based on pattern matching."""
-        result = self._match_patterns(message, context, targets)
+        result = self._match_patterns(message, context, targets, client_config)
 
         # Ensure all required fields
         return {
