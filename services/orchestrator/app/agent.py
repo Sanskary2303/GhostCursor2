@@ -102,7 +102,15 @@ class MockAgentProvider:
     for local testing without real GCP/Gemini credentials.
     """
 
-    def _match_patterns(self, message: str, context: dict, targets: list, client_config: Optional[Any] = None) -> dict:
+    def _match_patterns(
+        self,
+        message: str,
+        context: dict,
+        targets: list,
+        client_config: Optional[Any] = None,
+        history: Optional[list] = None,
+        original_message: Optional[str] = None,
+    ) -> dict:
         """Pattern-match user messages to generate realistic tool call responses."""
         from .guardrails import is_out_of_scope, get_guardrail_rejection
 
@@ -121,7 +129,42 @@ class MockAgentProvider:
             return get_guardrail_rejection(refusal_msg)
 
         msg = message.lower().strip()
+        orig = (original_message or "").lower().strip()
         page = context.get("page", "")
+
+        # --- Clarification answer: Checkout shipping address ---
+        if ("checkout" in orig or "address" in orig) and ("123" in msg or "main" in msg or "saved" in msg or "address" in msg or "new" in msg):
+            actions = []
+            if page != "checkout":
+                actions.append({
+                    "id": "act_1",
+                    "tool": "navigate",
+                    "parameters": {"target_page": "checkout", "explanation": "Navigating to checkout page."},
+                })
+            act_offset = len(actions) + 1
+            actions.extend([
+                {"id": f"act_{act_offset}", "tool": "fill_input", "parameters": {"target_id": "checkout.address.street", "value": "123 Main St", "explanation": "Filling in street address."}},
+                {"id": f"act_{act_offset+1}", "tool": "fill_input", "parameters": {"target_id": "checkout.address.city", "value": "New York", "explanation": "Filling in city."}},
+                {"id": f"act_{act_offset+2}", "tool": "fill_input", "parameters": {"target_id": "checkout.address.state", "value": "NY", "explanation": "Filling in state."}},
+                {"id": f"act_{act_offset+3}", "tool": "fill_input", "parameters": {"target_id": "checkout.address.zip", "value": "10001", "explanation": "Filling in zip code."}},
+            ])
+            return {
+                "reply": "I'll fill in the shipping address for you.",
+                "actions": actions,
+                "status": "awaiting_actions",
+            }
+
+        # --- Clarification answer: Order tracking selection ---
+        if ("order" in orig or "track" in orig) and "sh-" in msg:
+            import re
+            order_match = re.search(r"(SH-\d+|order\s*#?\s*\d+)", msg, re.IGNORECASE)
+            if order_match:
+                return {
+                    "reply": f"Let me look up {order_match.group(1)} for you.",
+                    "toolCalls": [{"id": "tc_1", "tool": "lookup_order", "parameters": {"order_id": order_match.group(1)}}],
+                    "actions": [],
+                    "status": "awaiting_tools",
+                }
 
         # --- Dark mode / Light mode / theme ---
         if any(kw in msg for kw in ["dark mode", "dark theme", "switch theme", "appearance", "light mode", "light theme", "light"]):
@@ -294,9 +337,11 @@ class MockAgentProvider:
         targets: list,
         tools: list,
         client_config: Optional[Any] = None,
+        history: Optional[list] = None,
+        original_message: Optional[str] = None,
     ) -> dict:
         """Generate a mock agent response based on pattern matching."""
-        result = self._match_patterns(message, context, targets, client_config)
+        result = self._match_patterns(message, context, targets, client_config, history, original_message)
 
         # Ensure all required fields
         return {

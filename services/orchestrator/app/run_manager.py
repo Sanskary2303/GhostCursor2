@@ -216,15 +216,26 @@ class RunManager:
             run.history.append({"role": "user", "content": req.answer})
             # Re-plan with the answer
             try:
+                from .tenant_config import get_tenant_config, extract_brain_config
+                brain_cfg = extract_brain_config(run.brain)
+                req_overrides = req.clientConfig.model_dump(exclude_none=True) if getattr(req, "clientConfig", None) else {}
+                effective_config = {**brain_cfg, **req_overrides}
+                tenant_cfg = get_tenant_config(tenant, effective_config)
+
                 agent_result = await self.provider.generate(
                     message=req.answer,
                     context=req.context.model_dump() if req.context else run.context,
                     brain=run.brain,
                     targets=(req.context.model_dump() if req.context else run.context).get("availableTargets", []),
                     tools=run.tools,
+                    client_config=tenant_cfg,
+                    history=list(run.history),
+                    original_message=run.original_message,
                 )
                 run.plan = agent_result
                 run.status = agent_result.get("status", "completed")
+                if agent_result.get("reply"):
+                    run.history.append({"role": "assistant", "content": agent_result["reply"]})
             except Exception:
                 run.status = "failed"
                 run.plan = {"reply": "I encountered an error. Please try again.", "actions": [], "questions": [], "toolCalls": []}
@@ -253,7 +264,15 @@ class RunManager:
             else:
                 # Continue with results
                 try:
-                    agent_result = await self.provider.continue_with_results(run.to_dict(), results)
+                    from .tenant_config import get_tenant_config, extract_brain_config
+                    brain_cfg = extract_brain_config(run.brain)
+                    req_overrides = req.clientConfig.model_dump(exclude_none=True) if getattr(req, "clientConfig", None) else {}
+                    effective_config = {**brain_cfg, **req_overrides}
+                    tenant_cfg = get_tenant_config(tenant, effective_config)
+
+                    agent_result = await self.provider.continue_with_results(
+                        run.to_dict(), results, client_config=tenant_cfg
+                    )
                     run.plan = agent_result
                     run.status = agent_result.get("status", "completed")
                     if agent_result.get("reply"):

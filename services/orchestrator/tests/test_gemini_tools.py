@@ -202,3 +202,172 @@ async def test_vertex_provider_parses_tool_call_list():
     assert result["toolCalls"][0]["tool"] == "lookup_order"
     assert result["toolCalls"][0]["parameters"] == {"order_id": "SH-1024"}
 
+
+def test_build_continue_prompt_includes_message_history_and_results():
+    """Verify _build_continue_prompt constructs prompt with original message, history, and results."""
+    original_message = "Where is my order SH-1024?"
+    history = [
+        {"role": "user", "content": "Where is my order SH-1024?"},
+        {"role": "assistant", "content": "Looking up SH-1024..."},
+    ]
+    results = [
+        {"id": "tc_1", "ok": True, "output": {"status": "Shipped", "eta": "2 days"}},
+    ]
+
+    prompt = VertexAILLMProvider._build_continue_prompt(original_message, history, results)
+    assert "### ORIGINAL USER REQUEST:" in prompt
+    assert original_message in prompt
+    assert "### RUN CONVERSATION HISTORY:" in prompt
+    assert "Looking up SH-1024..." in prompt
+    assert "### TOOL / ACTION EXECUTION RESULTS:" in prompt
+    assert "tc_1" in prompt
+    assert "Shipped" in prompt
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_continue_with_results_calls_gemini():
+    """Verify continue_with_results calls Gemini with prompt containing original message, history, results and returns normal plan JSON."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    gemini_plan_response = json.dumps({
+        "reply": "Your order SH-1024 is currently In Transit and arriving in 2 business days.",
+        "status": "completed",
+        "actions": [],
+        "questions": [],
+        "toolCalls": [],
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.text = gemini_plan_response
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
+
+    run_state = {
+        "id": "run-101",
+        "tenant": "shophive_demo",
+        "original_message": "Where is my order SH-1024?",
+        "history": [
+            {"role": "user", "content": "Where is my order SH-1024?"},
+            {"role": "assistant", "content": "Let me look up SH-1024 for you."},
+        ],
+        "brain": "ShopHive orders platform",
+        "context": {"page": "orders", "availableTargets": []},
+        "tools": [{"name": "lookup_order", "description": "Look up order", "parameters": {}}],
+    }
+
+    results = [
+        {
+            "id": "tc_1",
+            "ok": True,
+            "output": {"order_id": "SH-1024", "status": "In Transit", "estimated_delivery": "2 days"},
+        }
+    ]
+
+    with patch("google.genai.Client", return_value=mock_client):
+        plan = await provider.continue_with_results(run_state, results)
+
+    # 1. Verify Gemini was called
+    assert mock_client.aio.models.generate_content.called
+    call_args, call_kwargs = mock_client.aio.models.generate_content.call_args
+    sent_contents = call_kwargs["contents"]
+    assert "Where is my order SH-1024?" in sent_contents
+    assert "tc_1" in sent_contents
+    assert "In Transit" in sent_contents
+
+    # 2. Verify normal plan JSON is returned
+    assert plan["status"] == "completed"
+    assert "In Transit" in plan["reply"]
+    assert plan["actions"] == []
+    assert plan["questions"] == []
+    assert plan["toolCalls"] == []
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_continue_with_results_fallback_on_error():
+    """Verify continue_with_results falls back to mock provider if Gemini call fails."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(side_effect=RuntimeError("GCP Quota Exceeded"))
+
+    run_state = {
+        "id": "run-102",
+        "tenant": "shophive_demo",
+        "original_message": "Where is my order SH-1024?",
+        "history": [],
+        "brain": "ShopHive",
+        "context": {},
+        "tools": [],
+    }
+
+    results = [{"id": "tc_1", "ok": True, "output": "Order delivered"}]
+
+    with patch("google.genai.Client", return_value=mock_client):
+        plan = await provider.continue_with_results(run_state, results)
+
+    # Deterministic fallback handles it safely
+    assert plan["status"] == "completed"
+    assert "Order delivered" in plan["reply"]
+
+
+@pytest.mark.asyncio
+async def test_run_manager_replan_passes_original_message_history_client_config():
+    """Verify run_manager passes original_message, history, and client_config when re-planning after a clarification answer."""
+    import uuid
+    from app.models import ContinueRunRequest
+
+    store = MemoryRunStore()
+    mock_provider = MagicMock()
+    mock_provider.generate = AsyncMock(return_value={
+        "reply": "Which shipping address should I use?",
+        "status": "awaiting_answer",
+        "questions": [{"question": "Which address?", "options": ["123 Main St"]}],
+        "actions": [],
+        "toolCalls": [],
+    })
+    manager = RunManager(store=store, provider=mock_provider)
+
+    # 1. Create run
+    req = CreateRunRequest(
+        protocolVersion="1",
+        requestId=uuid.uuid4(),
+        message="Checkout my cart",
+        context=GhostContext(page="cart"),
+        brain="Platform knowledge",
+    )
+    resp = await manager.create_run("shophive_demo", "user_1", req)
+    assert resp.status == "awaiting_answer"
+
+    # 2. Reset mock to capture re-planning call
+    mock_provider.generate.reset_mock()
+    mock_provider.generate.return_value = {
+        "reply": "Filling address now",
+        "status": "awaiting_actions",
+        "actions": [{"id": "act_1", "tool": "fill_input", "parameters": {}}],
+        "questions": [],
+        "toolCalls": [],
+    }
+
+    # 3. Continue with answer
+    cont_req = ContinueRunRequest(
+        protocolVersion="1",
+        eventId=uuid.uuid4(),
+        revision=resp.revision,
+        kind="answer",
+        answer="123 Main St, New York, NY 10001",
+    )
+    cont_resp = await manager.continue_run(resp.runId, "shophive_demo", "user_1", cont_req)
+
+    # 4. Verify generate was called with original_message, history, and client_config
+    assert mock_provider.generate.called
+    call_kwargs = mock_provider.generate.call_args.kwargs
+    assert call_kwargs["message"] == "123 Main St, New York, NY 10001"
+    assert call_kwargs["original_message"] == "Checkout my cart"
+    assert len(call_kwargs["history"]) >= 2
+    assert call_kwargs["history"][-1]["content"] == "123 Main St, New York, NY 10001"
+    assert call_kwargs["client_config"] is not None
+
+    assert cont_resp.status == "awaiting_actions"
+
+
