@@ -371,3 +371,69 @@ async def test_run_manager_replan_passes_original_message_history_client_config(
     assert cont_resp.status == "awaiting_actions"
 
 
+def test_gateway_style_tool_declaration_keeps_parameters_in_gemini_prompt():
+    """Verify ToolDeclaration accepts inputSchema from Python gateway and keeps its parameters in Gemini prompt."""
+    from app.models import ToolDeclaration, CreateRunRequest, GhostContext
+    from app.llm.provider import VertexAILLMProvider
+
+    # Gateway-style declaration produced by RegisteredTool.to_declaration() in packages/sdk-server-python
+    gateway_tool_payload = {
+        "name": "lookup_order",
+        "description": "Checks order status, shipment tracking, and items for the authenticated user",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": "Order ID to lookup, e.g. 'SH-1024' or 'ORD-20241001-A7X'",
+                    "title": "Order Id",
+                }
+            },
+            "required": ["order_id"],
+            "title": "OrderQuery",
+        },
+        "readOnly": True,
+    }
+
+    # 1. ToolDeclaration model accepts inputSchema key and populates parameters
+    tool_decl = ToolDeclaration.model_validate(gateway_tool_payload)
+    assert tool_decl.name == "lookup_order"
+    assert tool_decl.parameters["type"] == "object"
+    assert "order_id" in tool_decl.parameters["properties"]
+    assert tool_decl.parameters["required"] == ["order_id"]
+
+    # 2. When submitted in CreateRunRequest, parameters are retained
+    run_req = CreateRunRequest(
+        protocolVersion="1",
+        requestId="22222222-2222-2222-2222-222222222222",
+        message="Where is order SH-1024?",
+        context=GhostContext(page="orders"),
+        brain="Platform knowledge",
+        tools=[gateway_tool_payload],
+    )
+    assert len(run_req.tools) == 1
+    assert run_req.tools[0].name == "lookup_order"
+    assert "order_id" in run_req.tools[0].parameters["properties"]
+
+    # 3. Serialized tools passed to VertexAILLMProvider keep parameters in Gemini prompt
+    provider = VertexAILLMProvider(project_id="test-proj")
+    tools_for_provider = [t.model_dump() for t in run_req.tools]
+    prompt = provider._build_system_instruction(
+        app_name="ShopHive",
+        app_type="e-commerce store",
+        refusal_msg="Out of scope refusal",
+        brain="ShopHive platform brain",
+        targets=["orders.tracking_link"],
+        tools=tools_for_provider,
+        context={"page": "orders"},
+    )
+
+    # 4. Assert tool parameters are present in the Gemini prompt
+    assert "lookup_order" in prompt
+    assert "parameters:" in prompt
+    assert "order_id" in prompt
+    assert "ORD-20241001-A7X" in prompt
+    assert "OrderQuery" in prompt
+
+
+
