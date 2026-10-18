@@ -110,48 +110,66 @@ class VertexAILLMProvider(LLMProvider):
             f"Initialized VertexAILLMProvider (Project: {self.project_id}, Region: {self.location}, Model: {self.model_name})"
         )
 
-    async def generate(
+    @staticmethod
+    def _normalize_tool_declarations(tools: list) -> list[dict]:
+        """Normalize tool declarations into list of dicts with name, description, parameters."""
+        declarations = []
+        for t in (tools or []):
+            if isinstance(t, dict):
+                t_name = t.get("name", "")
+                t_desc = t.get("description", "")
+                t_params = t.get("parameters") or t.get("inputSchema") or t.get("input_schema") or t.get("schema") or {}
+            elif hasattr(t, "name"):
+                t_name = getattr(t, "name", "")
+                t_desc = getattr(t, "description", "")
+                t_params = getattr(t, "parameters", None) or getattr(t, "input_schema", None) or getattr(t, "schema", None) or {}
+            else:
+                t_name = str(t)
+                t_desc = ""
+                t_params = {}
+
+            if hasattr(t_params, "model_dump"):
+                t_params = t_params.model_dump()
+            elif hasattr(t_params, "dict"):
+                t_params = t_params.dict()
+
+            declarations.append({
+                "name": t_name,
+                "description": t_desc,
+                "parameters": t_params,
+            })
+        return declarations
+
+    @classmethod
+    def _format_tools(cls, tools: list) -> str:
+        """Format customer backend tool declarations (name, description, parameters) for Gemini."""
+        declarations = cls._normalize_tool_declarations(tools)
+        if declarations:
+            lines = []
+            for t in declarations:
+                lines.append(
+                    f"- {t['name']}: {t['description']}\n"
+                    f"    name: {t['name']}\n"
+                    f"    description: {t['description']}\n"
+                    f"    parameters: {json.dumps(t['parameters'])}"
+                )
+            return "\n".join(lines)
+        return "None registered."
+
+    def _build_system_instruction(
         self,
-        message: str,
-        context: dict,
+        app_name: str,
+        app_type: str,
+        refusal_msg: str,
         brain: str,
         targets: list,
         tools: list,
-        client_config: Optional[Any] = None,
-    ) -> dict:
-        """Generate tool calls and reasoning with Gemini 2.0 with strict guardrails."""
-        from ..guardrails import is_out_of_scope, get_guardrail_rejection, DEFAULT_OUT_OF_SCOPE_MESSAGE
+        context: dict,
+    ) -> str:
+        """Construct the Gemini system instruction prompt with backend tools declarations."""
+        backend_tools_str = self._format_tools(tools)
 
-        # Resolve client configuration (app_name, app_type, custom refusal message)
-        app_name = "this application"
-        app_type = "web application"
-        refusal_msg = None
-
-        if client_config:
-            if hasattr(client_config, "app_name"):
-                app_name = client_config.app_name or "this application"
-                app_type = client_config.app_type or "web application"
-                refusal_msg = client_config.get_refusal_message()
-            elif isinstance(client_config, dict):
-                app_name = client_config.get("appName") or client_config.get("app_name") or "this application"
-                app_type = client_config.get("appType") or client_config.get("app_type") or "web application"
-                refusal_msg = client_config.get("outOfScopeMessage") or client_config.get("out_of_scope_message")
-
-        if not refusal_msg:
-            if app_name != "this application":
-                refusal_msg = (
-                    f"This request is out of scope. I can only assist with navigating and using {app_name}, "
-                    "performing on-screen actions, and answering questions related to its functionality."
-                )
-            else:
-                refusal_msg = DEFAULT_OUT_OF_SCOPE_MESSAGE
-
-        # Pre-execution deterministic guardrail
-        if is_out_of_scope(message):
-            logger.info(f"Guardrail triggered for out-of-scope message: {message!r}")
-            return get_guardrail_rejection(refusal_msg)
-
-        system_instruction = f"""You are Ghost Cursor, an autonomous UI co-pilot for {app_name}.
+        return f"""You are Ghost Cursor, an autonomous UI co-pilot for {app_name}.
 You assist users by invoking frontend action tools to operate this {app_type}'s user interface,
 or querying customer backend knowledge tools for customer database and business context.
 
@@ -199,6 +217,9 @@ Values on Screen: {context.get('values', {})}
 - guided_tour: {{"steps": [{{"target_id": "<target_id>", "message": "<step_message>"}}]}}
   * Guide the user with spotlight callouts.
 
+### CUSTOMER BACKEND TOOLS AVAILABLE:
+{backend_tools_str}
+
 ### PROTOCOL EXECUTION RULES:
 1. When the user requests a UI action (e.g. turn website to light mode, switch to dark mode, add to cart, fill form):
    - You MUST populate `actions` with the step-by-step action sequence.
@@ -206,7 +227,11 @@ Values on Screen: {context.get('values', {})}
    - In `reply`, provide a short, friendly conversational sentence explaining what you will do (e.g. "I'll switch the website to Light Mode for you."). NEVER put raw JSON or code blocks in `reply`!
    - Set `status` to "awaiting_actions".
 2. If asking clarification, populate `questions` (with `question` and `options`) and set `status` to "awaiting_answer".
-3. If calling registered backend tools (e.g. lookup_order), populate `toolCalls` and set `status` to "awaiting_tools".
+3. If calling registered backend tools (e.g. lookup_order):
+   - You MUST populate `toolCalls` with: {{"id": "tc_1", "tool": "<registered_backend_tool_name>", "parameters": {{ ... }}}}.
+   - In `reply`, provide a short, friendly conversational sentence explaining what you will look up (e.g. "Let me look up order SH-1024 for you."). NEVER put raw JSON or code blocks in `reply`!
+   - Set `status` to "awaiting_tools".
+   - Set `actions`: [] and `questions`: [].
 4. If answering a question or refusing an out-of-scope query, set `actions`: [], `questions`: [], `toolCalls`: [], `status`: "completed", and put the text response in `reply`.
 5. Discrete plan constraint: Only ONE of `actions`, `questions`, or `toolCalls` can be non-empty in a response.
 
@@ -223,9 +248,69 @@ Output strictly a valid JSON object matching this schema:
     }}
   ],
   "questions": [],
-  "toolCalls": []
+  "toolCalls": [
+    {{
+      "id": "tc_1",
+      "tool": "<registered_backend_tool_name>",
+      "parameters": {{ ... }}
+    }}
+  ]
 }}
 """
+
+    async def generate(
+        self,
+        message: str,
+        context: dict,
+        brain: str,
+        targets: list,
+        tools: list,
+        client_config: Optional[Any] = None,
+    ) -> dict:
+        """Generate tool calls and reasoning with Gemini 2.0 with strict guardrails."""
+        from ..guardrails import is_out_of_scope, get_guardrail_rejection, DEFAULT_OUT_OF_SCOPE_MESSAGE
+
+        # Resolve client configuration (app_name, app_type, custom refusal message)
+        app_name = "this application"
+        app_type = "web application"
+        refusal_msg = None
+
+        if client_config:
+            if hasattr(client_config, "app_name"):
+                app_name = client_config.app_name or "this application"
+                app_type = client_config.app_type or "web application"
+                refusal_msg = client_config.get_refusal_message()
+            elif isinstance(client_config, dict):
+                app_name = client_config.get("appName") or client_config.get("app_name") or "this application"
+                app_type = client_config.get("appType") or client_config.get("app_type") or "web application"
+                refusal_msg = client_config.get("outOfScopeMessage") or client_config.get("out_of_scope_message")
+
+        if not refusal_msg:
+            if app_name != "this application":
+                refusal_msg = (
+                    f"This request is out of scope. I can only assist with navigating and using {app_name}, "
+                    "performing on-screen actions, and answering questions related to its functionality."
+                )
+            else:
+                refusal_msg = DEFAULT_OUT_OF_SCOPE_MESSAGE
+
+        # Pre-execution deterministic guardrail
+        if is_out_of_scope(message):
+            logger.info(f"Guardrail triggered for out-of-scope message: {message!r}")
+            return get_guardrail_rejection(refusal_msg)
+
+        backend_tool_declarations = self._normalize_tool_declarations(tools)
+        backend_tool_names = {t["name"] for t in backend_tool_declarations if t.get("name")}
+
+        system_instruction = self._build_system_instruction(
+            app_name=app_name,
+            app_type=app_type,
+            refusal_msg=refusal_msg,
+            brain=brain,
+            targets=targets,
+            tools=tools,
+            context=context,
+        )
         # Try importing and using google.genai or vertexai SDK
         try:
             from google import genai
@@ -271,9 +356,14 @@ Output strictly a valid JSON object matching this schema:
                     except Exception:
                         parsed = None
 
+            # If parsed is a single tool call / action dict without actions/toolCalls wrapper:
+            if isinstance(parsed, dict) and ("tool" in parsed or "name" in parsed) and "toolCalls" not in parsed and "actions" not in parsed and "status" not in parsed:
+                parsed = [parsed]
+
             # 1. If parsed is a list of actions/tool calls (e.g. [{"name": "navigate", ...}] or [{"tool": "navigate", ...}])
             if isinstance(parsed, list):
                 actions = []
+                tool_calls = []
                 for idx, item in enumerate(parsed):
                     if not isinstance(item, dict):
                         continue
@@ -291,11 +381,27 @@ Output strictly a valid JSON object matching this schema:
                     else:
                         params = {k: v for k, v in raw_params.items() if k not in ("tool", "name", "action", "id")}
 
-                    actions.append({
-                        "id": f"act_{idx + 1}",
-                        "tool": tool,
-                        "parameters": params,
-                    })
+                    if tool in backend_tool_names or tool in ("lookup_order", "check_warehouse_stock", "simulate_discount_roi"):
+                        tool_calls.append({
+                            "id": f"tc_{idx + 1}",
+                            "tool": tool,
+                            "parameters": params,
+                        })
+                    else:
+                        actions.append({
+                            "id": f"act_{idx + 1}",
+                            "tool": tool,
+                            "parameters": params,
+                        })
+
+                if tool_calls:
+                    return {
+                        "reply": "I'll look that up for you.",
+                        "questions": [],
+                        "actions": [],
+                        "toolCalls": tool_calls,
+                        "status": "awaiting_tools",
+                    }
 
                 friendly_reply = "I'll perform the requested actions for you."
                 if any("theme" in str(a) or "settings" in str(a) for a in actions):
@@ -314,7 +420,7 @@ Output strictly a valid JSON object matching this schema:
                 reply = parsed.get("reply")
                 actions = parsed.get("actions", [])
                 questions = parsed.get("questions", [])
-                tool_calls = parsed.get("toolCalls") or parsed.get("tool_calls", [])
+                raw_tool_calls = parsed.get("toolCalls") or parsed.get("tool_calls", [])
 
                 # If reply itself was accidentally set to raw JSON code block, clean it up
                 if reply and (reply.strip().startswith("```") or reply.strip().startswith("{") or reply.strip().startswith("[")):
@@ -322,6 +428,8 @@ Output strictly a valid JSON object matching this schema:
                         reply = "I'll perform the planned actions for you."
                     elif questions:
                         reply = None
+                    elif raw_tool_calls:
+                        reply = "I'll look that up for you."
                     else:
                         reply = "Here is what I found."
 
@@ -343,26 +451,61 @@ Output strictly a valid JSON object matching this schema:
                         "parameters": a_params,
                     })
 
-                # Determine discrete plan status
-                if normalized_actions:
+                # Normalize tool_calls
+                normalized_tool_calls = []
+                for idx, tc in enumerate(raw_tool_calls):
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = tc.get("id") or f"tc_{idx + 1}"
+                    tc_tool = tc.get("tool") or tc.get("name") or ""
+                    tc_params = tc.get("parameters") or tc.get("arguments") or {}
+                    if not isinstance(tc_params, dict):
+                        tc_params = {}
+                    normalized_tool_calls.append({
+                        "id": tc_id,
+                        "tool": tc_tool,
+                        "parameters": tc_params,
+                    })
+
+                # Determine discrete plan status respecting model's indicated status if present
+                indicated_status = parsed.get("status")
+                if indicated_status == "awaiting_tools" and normalized_tool_calls:
+                    status = "awaiting_tools"
+                    normalized_actions = []
+                    questions = []
+                    if not reply:
+                        reply = "I'll look that up for you."
+                elif indicated_status == "awaiting_actions" and normalized_actions:
+                    status = "awaiting_actions"
+                    normalized_tool_calls = []
+                    questions = []
+                    if not reply:
+                        reply = "I'll execute the planned actions for you."
+                elif indicated_status == "awaiting_answer" and questions:
+                    status = "awaiting_answer"
+                    normalized_actions = []
+                    normalized_tool_calls = []
+                elif normalized_tool_calls:
+                    status = "awaiting_tools"
+                    normalized_actions = []
+                    questions = []
+                    if not reply:
+                        reply = "I'll look that up for you."
+                elif normalized_actions:
                     status = "awaiting_actions"
                     questions = []
-                    tool_calls = []
+                    normalized_tool_calls = []
                     if not reply:
                         reply = "I'll execute the planned actions for you."
                 elif questions:
                     status = "awaiting_answer"
                     normalized_actions = []
-                    tool_calls = []
-                elif tool_calls:
-                    status = "awaiting_tools"
-                    normalized_actions = []
-                    questions = []
+                    normalized_tool_calls = []
                 else:
                     status = "completed"
                     normalized_actions = []
                     questions = []
-                    tool_calls = []
+                    normalized_tool_calls = []
                     if not reply:
                         reply = raw_text
 
@@ -370,7 +513,7 @@ Output strictly a valid JSON object matching this schema:
                     "reply": reply,
                     "questions": questions,
                     "actions": normalized_actions,
-                    "toolCalls": tool_calls,
+                    "toolCalls": normalized_tool_calls,
                     "status": status,
                 }
 
