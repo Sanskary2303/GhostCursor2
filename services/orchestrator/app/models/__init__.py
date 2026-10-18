@@ -22,6 +22,14 @@ from pydantic import (
     field_validator,
 )
 
+from .contracts import (
+    HostedRunResponse,
+    ToolCallRequest,
+    ClarifyQuestion,
+    validate_actions,
+    validate_logical_id,
+)
+
 # ---------------------------------------------------------------------------
 # Regex patterns for ID validation
 # ---------------------------------------------------------------------------
@@ -262,7 +270,6 @@ class CreateRunRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     tools: list[ToolDeclaration] = Field(default_factory=list)
     clientConfig: Optional[ClientConfig] = Field(default=None, description="Optional client-level configuration overrides")
-
 
 
 class ContinueRunRequest(BaseModel):

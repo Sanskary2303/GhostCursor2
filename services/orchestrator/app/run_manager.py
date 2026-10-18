@@ -107,14 +107,18 @@ class RunManager:
                 raise HTTPException(status_code=409, detail="Conflict: changed payload under same requestId.")
 
         # Create new run
+        run_id = str(uuid.uuid4())
+        ctx_dict = req.context.model_dump() if req.context else {}
+        ctx_dict.setdefault("run_id", run_id)
+        ctx_dict.setdefault("subject", subject)
         run = RunState(
-            id=str(uuid.uuid4()),
+            id=run_id,
             tenant=tenant,
             subject=subject,
             request_id=request_id,
             original_message=req.message,
             brain=req.brain or "",
-            context=req.context.model_dump() if req.context else {},
+            context=ctx_dict,
             tools=[t.model_dump() if hasattr(t, 'model_dump') else t for t in (req.tools or [])],
             start_digest=start_digest,
         )

@@ -764,12 +764,28 @@ Output strictly a JSON list of {count} suggested questions."""
 def get_llm_provider() -> LLMProvider:
     """Factory creating the configured LLM provider based on environment variables.
 
-    Set LLM_PROVIDER=vertex to enable live Google Cloud Vertex AI calls.
+    Set GHOST_PROVIDER=adk to enable Google ADK agent provider.
+    Set LLM_PROVIDER=vertex or GHOST_PROVIDER=vertex to enable live Google Cloud Vertex AI calls.
     Defaults to MockLLMProvider for zero-config offline runs.
     """
-    provider_type = os.getenv("LLM_PROVIDER", "mock").lower()
+    provider_type = (os.getenv("GHOST_PROVIDER") or os.getenv("LLM_PROVIDER") or "mock").lower()
     logger.info(f"LLM Provider selected: {provider_type}")
+    if provider_type == "adk":
+        from .adk import ADKProvider
+        return ADKProvider()
     if provider_type in ("vertex", "vertexai", "gemini", "gcp"):
         return VertexAILLMProvider()
     
     return MockLLMProvider()
+
+
+from .adk import ADKProvider, ADKLLMProvider
+
+__all__ = [
+    "LLMProvider",
+    "MockLLMProvider",
+    "VertexAILLMProvider",
+    "ADKProvider",
+    "ADKLLMProvider",
+    "get_llm_provider",
+]
