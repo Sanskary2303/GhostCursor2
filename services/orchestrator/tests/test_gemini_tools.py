@@ -436,4 +436,189 @@ def test_gateway_style_tool_declaration_keeps_parameters_in_gemini_prompt():
     assert "OrderQuery" in prompt
 
 
+def test_format_tools_shows_name_and_description_only_once():
+    """Verify _format_tools shows each tool's name and description only once."""
+    tools = [
+        {
+            "name": "lookup_order",
+            "description": "Checks order status and shipment tracking",
+            "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}},
+        },
+        {
+            "name": "get_loyalty_points",
+            "description": "Retrieves user reward points",
+            "parameters": {},
+        },
+    ]
+
+    formatted = VertexAILLMProvider._format_tools(tools)
+
+    # 1. Name is shown only once per tool
+    assert formatted.count("lookup_order") == 1
+    assert formatted.count("get_loyalty_points") == 1
+
+    # 2. Description is shown only once per tool
+    assert formatted.count("Checks order status and shipment tracking") == 1
+    assert formatted.count("Retrieves user reward points") == 1
+
+    # 3. Formatted structure is valid
+    assert "- name: lookup_order" in formatted
+    assert "  description: Checks order status and shipment tracking" in formatted
+    assert "  parameters:" in formatted
+    assert "- name: get_loyalty_points" in formatted
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_drops_empty_tool_name_in_tool_calls():
+    """Verify toolCalls with empty tool name are dropped."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    gemini_json_response = json.dumps({
+        "reply": "Looking up your order.",
+        "status": "awaiting_tools",
+        "toolCalls": [
+            {"id": "tc_1", "tool": "", "parameters": {}},
+            {"id": "tc_2", "name": "   ", "parameters": {}},
+            {"id": "tc_3", "tool": "lookup_order", "parameters": {"order_id": "SH-1024"}},
+        ],
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.text = gemini_json_response
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = await provider.generate(
+            message="Track SH-1024",
+            context={"page": "orders"},
+            brain="ShopHive orders",
+            targets=[],
+            tools=[{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
+        )
+
+    assert result["status"] == "awaiting_tools"
+    assert len(result["toolCalls"]) == 1
+    assert result["toolCalls"][0]["tool"] == "lookup_order"
+    assert result["toolCalls"][0]["parameters"] == {"order_id": "SH-1024"}
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_drops_undeclared_tool_name_in_tool_calls():
+    """Verify toolCalls with undeclared tool name are dropped."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    gemini_json_response = json.dumps({
+        "reply": "Executing tools.",
+        "status": "awaiting_tools",
+        "toolCalls": [
+            {"id": "tc_1", "tool": "undeclared_custom_tool", "parameters": {"foo": "bar"}},
+            {"id": "tc_2", "tool": "lookup_order", "parameters": {"order_id": "SH-1024"}},
+        ],
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.text = gemini_json_response
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = await provider.generate(
+            message="Track SH-1024",
+            context={"page": "orders"},
+            brain="ShopHive orders",
+            targets=[],
+            tools=[{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
+        )
+
+    assert result["status"] == "awaiting_tools"
+    assert len(result["toolCalls"]) == 1
+    assert result["toolCalls"][0]["tool"] == "lookup_order"
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_removes_hardcoded_shophive_tool_names():
+    """Verify hardcoded ShopHive tool names are NOT accepted if undeclared."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    # Model attempts to call check_warehouse_stock and simulate_discount_roi, but only lookup_order is declared
+    gemini_json_response = json.dumps({
+        "reply": "Checking inventory and discount.",
+        "status": "awaiting_tools",
+        "toolCalls": [
+            {"id": "tc_1", "tool": "check_warehouse_stock", "parameters": {"sku": "SKU-99"}},
+            {"id": "tc_2", "tool": "simulate_discount_roi", "parameters": {"promo_code": "SAVE20"}},
+            {"id": "tc_3", "tool": "lookup_order", "parameters": {"order_id": "SH-1024"}},
+        ],
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.text = gemini_json_response
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = await provider.generate(
+            message="Track SH-1024 and check stock",
+            context={"page": "orders"},
+            brain="ShopHive orders",
+            targets=[],
+            tools=[{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
+        )
+
+    # Only lookup_order was declared, so check_warehouse_stock and simulate_discount_roi are dropped
+    assert result["status"] == "awaiting_tools"
+    assert len(result["toolCalls"]) == 1
+    assert result["toolCalls"][0]["tool"] == "lookup_order"
+
+    # If NO tools are declared, all of them are dropped and status falls back to completed
+    with patch("google.genai.Client", return_value=mock_client):
+        result_empty = await provider.generate(
+            message="Track SH-1024 and check stock",
+            context={"page": "orders"},
+            brain="ShopHive orders",
+            targets=[],
+            tools=[],
+        )
+
+    assert result_empty["status"] == "completed"
+    assert len(result_empty["toolCalls"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_vertex_provider_parses_list_drops_empty_and_undeclared_tools():
+    """Verify parsed tool call list drops empty and undeclared tool names without hardcoded fallbacks."""
+    provider = VertexAILLMProvider(project_id="test-proj")
+
+    gemini_list_response = json.dumps([
+        {"tool": "", "parameters": {}},
+        {"tool": "check_warehouse_stock", "parameters": {"sku": "SKU-1"}},
+        {"tool": "lookup_order", "parameters": {"order_id": "SH-1024"}},
+    ])
+
+    mock_resp = MagicMock()
+    mock_resp.text = gemini_list_response
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = await provider.generate(
+            message="Track SH-1024",
+            context={"page": "orders"},
+            brain="ShopHive",
+            targets=[],
+            tools=[{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
+        )
+
+    assert result["status"] == "awaiting_tools"
+    assert len(result["toolCalls"]) == 1
+    assert result["toolCalls"][0]["tool"] == "lookup_order"
+    assert result["toolCalls"][0]["id"] == "tc_1"
+
+
+
 

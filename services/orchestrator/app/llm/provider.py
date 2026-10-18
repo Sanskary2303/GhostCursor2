@@ -150,7 +150,7 @@ class VertexAILLMProvider(LLMProvider):
                 t_params = t_params.dict()
 
             declarations.append({
-                "name": t_name,
+                "name": str(t_name).strip() if t_name else "",
                 "description": t_desc,
                 "parameters": t_params,
             })
@@ -164,10 +164,9 @@ class VertexAILLMProvider(LLMProvider):
             lines = []
             for t in declarations:
                 lines.append(
-                    f"- {t['name']}: {t['description']}\n"
-                    f"    name: {t['name']}\n"
-                    f"    description: {t['description']}\n"
-                    f"    parameters: {json.dumps(t['parameters'])}"
+                    f"- name: {t['name']}\n"
+                    f"  description: {t['description']}\n"
+                    f"  parameters: {json.dumps(t['parameters'])}"
                 )
             return "\n".join(lines)
         return "None registered."
@@ -243,7 +242,7 @@ Values on Screen: {context.get('values', {})}
    - In `reply`, provide a short, friendly conversational sentence explaining what you will do (e.g. "I'll switch the website to Light Mode for you."). NEVER put raw JSON or code blocks in `reply`!
    - Set `status` to "awaiting_actions".
 2. If asking clarification, populate `questions` (with `question` and `options`) and set `status` to "awaiting_answer".
-3. If calling registered backend tools (e.g. lookup_order):
+3. If calling registered backend tools:
    - You MUST populate `toolCalls` with: {{"id": "tc_1", "tool": "<registered_backend_tool_name>", "parameters": {{ ... }}}}.
    - In `reply`, provide a short, friendly conversational sentence explaining what you will look up (e.g. "Let me look up order SH-1024 for you."). NEVER put raw JSON or code blocks in `reply`!
    - Set `status` to "awaiting_tools".
@@ -325,7 +324,9 @@ If further actions, backend tool calls, or clarification questions are needed, s
             for idx, item in enumerate(parsed):
                 if not isinstance(item, dict):
                     continue
-                tool = item.get("tool") or item.get("name") or item.get("action") or "navigate"
+                tool = (item.get("tool") or item.get("name") or item.get("action") or "").strip()
+                if not tool:
+                    continue
                 raw_params = item.get("parameters") or item.get("arguments") or item
                 params = {}
                 if tool == "navigate":
@@ -339,15 +340,15 @@ If further actions, backend tool calls, or clarification questions are needed, s
                 else:
                     params = {k: v for k, v in raw_params.items() if k not in ("tool", "name", "action", "id")}
 
-                if tool in backend_tool_names or tool in ("lookup_order", "check_warehouse_stock", "simulate_discount_roi"):
+                if tool in backend_tool_names:
                     tool_calls.append({
-                        "id": f"tc_{idx + 1}",
+                        "id": f"tc_{len(tool_calls) + 1}",
                         "tool": tool,
                         "parameters": params,
                     })
-                else:
+                elif tool in ("navigate", "click", "fill_input", "select_option", "toggle_switch", "guided_tour"):
                     actions.append({
-                        "id": f"act_{idx + 1}",
+                        "id": f"act_{len(actions) + 1}",
                         "tool": tool,
                         "parameters": params,
                     })
@@ -366,7 +367,7 @@ If further actions, backend tool calls, or clarification questions are needed, s
                 friendly_reply = "I'll update the appearance settings for you."
 
             return {
-                "reply": friendly_reply,
+                "reply": friendly_reply if actions else raw_text,
                 "questions": [],
                 "actions": actions,
                 "toolCalls": [],
@@ -409,13 +410,15 @@ If further actions, backend tool calls, or clarification questions are needed, s
                     "parameters": a_params,
                 })
 
-            # Normalize tool_calls
+            # Normalize tool_calls: drop empty or undeclared tool names
             normalized_tool_calls = []
             for idx, tc in enumerate(raw_tool_calls):
                 if not isinstance(tc, dict):
                     continue
-                tc_id = tc.get("id") or f"tc_{idx + 1}"
-                tc_tool = tc.get("tool") or tc.get("name") or ""
+                tc_tool = (tc.get("tool") or tc.get("name") or "").strip()
+                if not tc_tool or tc_tool not in backend_tool_names:
+                    continue
+                tc_id = tc.get("id") or f"tc_{len(normalized_tool_calls) + 1}"
                 tc_params = tc.get("parameters") or tc.get("arguments") or {}
                 if not isinstance(tc_params, dict):
                     tc_params = {}
